@@ -1,0 +1,15 @@
+# =============================================================================
+#  Dépendances pip du projet — CHU de Treichville
+# =============================================================================
+#  Le développement se fait sous conda (voir environment.yml). Ce fichier
+#  sert à l'image Docker qui exécute Airflow, où conda n'est pas disponible.
+#  Les deux fichiers sont maintenus cohérents.
+# =============================================================================
+
+# --- Traitement des données --------------------------------------------------
+pandas>=2.2,<3.0
+numpy>=1.26,<2.0
+
+# --- Notebook ----------------------------------------------------------------
+jupyter>=1.1
+notebook>=7.2
