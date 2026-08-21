@@ -1,0 +1,24 @@
+# Secrets — ne jamais versionner
+.env
+
+# Données : le dépôt versionne le générateur, pas les 25 Mo de CSV
+data/raw/*.csv
+data/processed/*
+!data/**/.gitkeep
+
+# Python / conda
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+venv/
+.venv/
+.conda/
+*.egg-info/
+
+# Airflow
+logs/
+airflow.db
+airflow.cfg
+
+# Système
+.DS_Store
