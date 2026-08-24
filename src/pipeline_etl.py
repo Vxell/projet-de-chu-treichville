@@ -327,7 +327,7 @@ def nettoyer(df):
 
 
 # =============================================================================
-# ÉTAPE 3 — PSEUDONYMISATION (loi ivoirienne n° 2019-992)
+# ÉTAPE 3 — PSEUDONYMISATION 
 # =============================================================================
 
 def pseudonymiser(df, sel=None):
