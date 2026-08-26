@@ -2,7 +2,8 @@
 =============================================================================
  PIPELINE ETL — ENTREPÔT ÉPIDÉMIOLOGIQUE DU CHU DE TREICHVILLE
 =============================================================================
- Étapes 1 à 5 — De l'extraction du fichier source aux contrôles qualité.
+ Étapes 1 à 6 — De l'extraction du fichier source à la modélisation
+ en étoile (dimensions et table de faits).
 
  Chaque étape est une fonction pure : elle reçoit un DataFrame et en renvoie
  un nouveau, sans modifier son entrée. Ce choix rend chaque étape testable
@@ -20,7 +21,8 @@ import pandas as pd
 
 from referentiels import (
     BORNES, COLONNES_IDENTIFIANTES, COLONNE_A_GENERALISER, COLONNE_A_HACHER,
-    ISSUES_VALIDES, MAPPING_ASSURANCE, MAPPING_SEXE,
+    ISSUES_VALIDES, LIBELLE_ISSUE, LIBELLE_JOUR, LIBELLE_MOIS,
+    LITS_PAR_SERVICE, MAPPING_ASSURANCE, MAPPING_SEXE,
     PATHOLOGIE_VERS_CATEGORIE, REFERENTIEL_COMMUNES, REFERENTIEL_PATHOLOGIES,
     REFERENTIEL_SERVICES, SAISON_PAR_MOIS, SEXE_INCONNU, TRANCHES_AGE,
 )
@@ -327,7 +329,7 @@ def nettoyer(df):
 
 
 # =============================================================================
-# ÉTAPE 3 — PSEUDONYMISATION 
+# ÉTAPE 3 — PSEUDONYMISATION (loi ivoirienne n° 2019-992)
 # =============================================================================
 
 def pseudonymiser(df, sel=None):
@@ -568,3 +570,151 @@ def controler_qualite(df, bloquant=True):
     n_ok = int((rapport["statut"] == "OK").sum())
     print(f"Contrôle qualité : {n_ok}/{len(rapport)} règles satisfaites")
     return rapport
+
+
+# =============================================================================
+# ÉTAPE 6 — MODÉLISATION EN ÉTOILE
+# =============================================================================
+
+def construire_dimensions(df):
+    """
+    Construit les six tables de dimension.
+
+    Chaque dimension reçoit une clé technique entière (surrogate key) plutôt
+    que d'utiliser le libellé comme clé : les jointures sur entier sont plus
+    rapides, et un changement de libellé (correction d'orthographe, fusion de
+    services) n'oblige pas à réécrire la table de faits.
+    """
+    dims = {}
+
+    # --- dim_date : une ligne par jour couvert par les données --------------
+    dates = pd.date_range(df["date_entree"].min().normalize(),
+                          df["date_entree"].max().normalize(), freq="D")
+    dim_date = pd.DataFrame({"date_jour": dates})
+    # Clé au format AAAAMMJJ : lisible à l'œil nu lors du débogage
+    dim_date["date_id"] = dim_date["date_jour"].dt.strftime("%Y%m%d").astype(int)
+    dim_date["jour"] = dim_date["date_jour"].dt.day
+    dim_date["mois"] = dim_date["date_jour"].dt.month
+    dim_date["libelle_mois"] = dim_date["mois"].map(LIBELLE_MOIS)
+    dim_date["trimestre"] = dim_date["date_jour"].dt.quarter
+    dim_date["annee"] = dim_date["date_jour"].dt.year
+    dim_date["jour_semaine"] = dim_date["date_jour"].dt.dayofweek.map(LIBELLE_JOUR)
+    dim_date["est_weekend"] = dim_date["date_jour"].dt.dayofweek >= 5
+    dim_date["saison"] = dim_date["mois"].map(SAISON_PAR_MOIS)
+    dim_date["annee_mois"] = dim_date["date_jour"].dt.strftime("%Y-%m")
+    dims["dim_date"] = dim_date[[
+        "date_id", "date_jour", "jour", "mois", "libelle_mois", "trimestre",
+        "annee", "annee_mois", "jour_semaine", "est_weekend", "saison"]]
+
+    # --- dim_service : enrichie de la capacité en lits ----------------------
+    services = sorted(df["service"].dropna().unique())
+    dims["dim_service"] = pd.DataFrame({
+        "service_id": range(1, len(services) + 1),
+        "libelle_service": services,
+        "capacite_lits": [LITS_PAR_SERVICE.get(s, 0) for s in services],
+    })
+
+    # --- dim_pathologie : hiérarchie diagnostic -> catégorie ----------------
+    patho = (df[["pathologie", "categorie_pathologie"]]
+             .drop_duplicates().sort_values("pathologie").reset_index(drop=True))
+    patho.insert(0, "pathologie_id", range(1, len(patho) + 1))
+    dims["dim_pathologie"] = patho.rename(columns={
+        "pathologie": "libelle_pathologie",
+        "categorie_pathologie": "categorie",
+    })
+
+    # --- dim_tranche_age : ordonnée pour l'affichage des graphiques ---------
+    tranches = pd.DataFrame(TRANCHES_AGE,
+                            columns=["ordre", "libelle_tranche",
+                                     "borne_min", "borne_max"])
+    tranches.insert(0, "tranche_id", tranches["ordre"])
+    inconnu = pd.DataFrame([{
+        "tranche_id": 99, "ordre": 99, "libelle_tranche": "Âge non renseigné",
+        "borne_min": None, "borne_max": None}])
+    dims["dim_tranche_age"] = pd.concat([tranches, inconnu], ignore_index=True)
+
+    # --- dim_commune --------------------------------------------------------
+    communes = sorted(df["commune_residence"].dropna().unique())
+    dims["dim_commune"] = pd.DataFrame({
+        "commune_id": range(1, len(communes) + 1),
+        "libelle_commune": communes,
+        "district": "Abidjan",
+    })
+
+    # --- dim_issue ----------------------------------------------------------
+    issues = sorted(df["issue"].dropna().unique())
+    dims["dim_issue"] = pd.DataFrame({
+        "issue_id": range(1, len(issues) + 1),
+        "code_issue": issues,
+        "libelle_issue": [LIBELLE_ISSUE.get(i, i) for i in issues],
+        "est_deces": [i == "Deces" for i in issues],
+    })
+
+    for nom, d in dims.items():
+        print(f"  {nom:<20} {len(d):>6} lignes")
+    return dims
+
+
+def construire_faits(df, dims):
+    """
+    Construit la table de faits par jointure sur les dimensions.
+
+    L'ordre est impératif : les dimensions doivent exister avant la table de
+    faits, sans quoi les clés étrangères seraient invalides. On vérifie
+    explicitement l'absence de valeur nulle sur chaque FK avant de rendre la
+    table — une seule FK nulle ferait échouer la contrainte d'intégrité au
+    moment de l'insertion dans PostgreSQL, après plusieurs minutes de
+    chargement.
+    """
+    faits = df.copy()
+
+    # Dictionnaires de correspondance libellé -> clé technique
+    map_service = dict(zip(dims["dim_service"]["libelle_service"],
+                           dims["dim_service"]["service_id"]))
+    map_patho = dict(zip(dims["dim_pathologie"]["libelle_pathologie"],
+                         dims["dim_pathologie"]["pathologie_id"]))
+    map_tranche = dict(zip(dims["dim_tranche_age"]["libelle_tranche"],
+                           dims["dim_tranche_age"]["tranche_id"]))
+    map_commune = dict(zip(dims["dim_commune"]["libelle_commune"],
+                           dims["dim_commune"]["commune_id"]))
+    map_issue = dict(zip(dims["dim_issue"]["code_issue"],
+                         dims["dim_issue"]["issue_id"]))
+
+    faits["date_id"] = faits["date_entree"].dt.strftime("%Y%m%d").astype(int)
+    faits["service_id"] = faits["service"].map(map_service)
+    faits["pathologie_id"] = faits["pathologie"].map(map_patho)
+    faits["tranche_id"] = faits["tranche_age"].map(map_tranche)
+    faits["commune_id"] = faits["commune_residence"].map(map_commune)
+    faits["issue_id"] = faits["issue"].map(map_issue)
+
+    colonnes = [
+        # Clé primaire
+        "id_admission",
+        # Clés étrangères vers les dimensions
+        "date_id", "service_id", "pathologie_id", "tranche_id",
+        "commune_id", "issue_id",
+        # Dimension dégénérée : identifiant patient pseudonymisé
+        "id_patient_pseudo",
+        # Attributs de contexte
+        "sexe", "age", "annee_naissance", "mode_admission", "gravite",
+        "assurance", "id_medecin", "heure_admission",
+        # Mesures
+        "duree_sejour_j", "cout_hospitalisation_fcfa", "cout_journalier_fcfa",
+        "temperature_entree_c", "sejour_prolonge", "est_readmission_30j",
+        "delai_readmission_j", "duree_imputee",
+    ]
+    faits["heure_admission"] = faits["date_entree"].dt.hour
+    faits = faits[colonnes]
+
+    # Contrôle d'intégrité référentielle avant restitution
+    fks = ["date_id", "service_id", "pathologie_id", "tranche_id",
+           "commune_id", "issue_id"]
+    nuls = {fk: int(faits[fk].isna().sum()) for fk in fks}
+    if any(nuls.values()):
+        raise ValueError(f"Clés étrangères non résolues : "
+                         f"{ {k: v for k, v in nuls.items() if v} }")
+
+    faits[fks] = faits[fks].astype(int)
+    print(f"  faits_admissions     {len(faits):>6} lignes, "
+          f"{len(fks)} clés étrangères toutes résolues")
+    return faits
