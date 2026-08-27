@@ -3,12 +3,13 @@
  PIPELINE ETL — ENTREPÔT ÉPIDÉMIOLOGIQUE DU CHU DE TREICHVILLE
 =============================================================================
  Ce module regroupe l'ensemble des fonctions du pipeline, de l'extraction du
- fichier source jusqu'au chargement du schéma en étoile dans Supabase.
+ fichier source jusqu'à la construction du schéma en étoile.
 
  Il est appelé de deux façons :
    - par le notebook notebooks/pipeline_etl.ipynb (exécution pas à pas,
      avec affichage des résultats intermédiaires) ;
-   - par le DAG Airflow (exécution automatisée quotidienne).
+   - par le DAG Airflow dags/dag_chu_admissions.py (exécution automatisée
+     quotidienne).
 
  Chaque étape est une fonction pure : elle reçoit un DataFrame et en renvoie
  un nouveau, sans modifier son entrée. Ce choix rend chaque étape testable
@@ -25,11 +26,12 @@ import numpy as np
 import pandas as pd
 
 from referentiels import (
-    BORNES, COLONNES_IDENTIFIANTES, COLONNE_A_GENERALISER, COLONNE_A_HACHER,
-    ISSUES_VALIDES, LIBELLE_ISSUE, LIBELLE_JOUR, LIBELLE_MOIS,
-    LITS_PAR_SERVICE, MAPPING_ASSURANCE, MAPPING_SEXE,
-    PATHOLOGIE_VERS_CATEGORIE, REFERENTIEL_COMMUNES, REFERENTIEL_PATHOLOGIES,
-    REFERENTIEL_SERVICES, SAISON_PAR_MOIS, SEXE_INCONNU, TRANCHES_AGE,
+    ASSURANCES_VALIDES, BORNES, COLONNES_IDENTIFIANTES, COLONNE_A_GENERALISER,
+    COLONNE_A_HACHER, GRAVITES_VALIDES, ISSUES_VALIDES, LIBELLE_ISSUE,
+    LIBELLE_JOUR, LIBELLE_MOIS, LITS_PAR_SERVICE, MAPPING_ASSURANCE,
+    MAPPING_SEXE, MODES_ADMISSION_VALIDES, PATHOLOGIE_VERS_CATEGORIE,
+    REFERENTIEL_COMMUNES, REFERENTIEL_PATHOLOGIES, REFERENTIEL_SERVICES,
+    SAISON_PAR_MOIS, SEXE_INCONNU, TRANCHES_AGE,
 )
 
 # Journal des transformations : chaque étape y consigne son effet sur le
@@ -751,9 +753,18 @@ def obtenir_moteur(url=None):
     return create_engine(url, pool_pre_ping=True)
 
 
-def charger_table(df, nom_table, moteur, si_existe="replace", taille_lot=5000):
+def charger_table(df, nom_table, moteur, si_existe="append", taille_lot=5000):
     """
     Charge un DataFrame dans PostgreSQL et renvoie la durée du chargement.
+
+    Le mode `append` est impératif ici. `if_exists="replace"` supprimerait la
+    table et la recréerait avec les types devinés par pandas : le schéma
+    déclaré dans sql/01_schema_etoile.sql serait perdu, avec ses contraintes
+    de clé étrangère, ses CHECK et ses types précis. L'entrepôt n'aurait plus
+    aucune intégrité référentielle, et les mesures décimales deviendraient
+    des flottants — ce qui casse au passage les fonctions SQL attendant du
+    numeric. Le schéma est défini une fois pour toutes par le DDL ; le
+    pipeline se contente de le remplir.
 
     `method="multi"` regroupe les lignes en insertions multi-valeurs :
     sur 120 000 lignes, on passe d'environ vingt minutes en insertion ligne
@@ -776,41 +787,30 @@ def charger_entrepot(dims, faits, audit_rgpd, moteur):
     """
     from sqlalchemy import text
 
-    # faits_admissions référence chaque dimension par clé étrangère (voir
-    # sql/01_schema_etoile.sql) : il faut la supprimer avant les dimensions,
-    # sans quoi le DROP TABLE émis par to_sql(if_exists="replace") échoue
-    # avec DependentObjectsStillExist.
+    # Les tables sont vidées, jamais supprimées : le schéma déclaré dans le
+    # DDL reste en place. TRUNCATE est préféré à DELETE — il ne journalise
+    # pas ligne à ligne et s'exécute en une fraction de seconde sur
+    # 120 000 enregistrements. CASCADE lève l'ordre de suppression imposé
+    # par les clés étrangères.
     with moteur.connect() as conn:
-        conn.execute(text("DROP TABLE IF EXISTS faits_admissions CASCADE"))
+        conn.execute(text(
+            "TRUNCATE faits_admissions, "
+            + ", ".join(dims.keys())
+            + " CASCADE"
+        ))
         conn.commit()
 
     resume = {}
     for nom, table in dims.items():
         resume[nom] = charger_table(table, nom, moteur)
     resume["faits_admissions"] = charger_table(faits, "faits_admissions", moteur)
-    resume["audit_rgpd"] = charger_table(audit_rgpd, "audit_rgpd", moteur,
-                                         si_existe="append")
-
-    # Les contraintes et index sont posés après le chargement : les créer
-    # avant ralentirait chaque insertion par la vérification des clés.
-    with moteur.connect() as conn:
-        for instruction in INDEX_POST_CHARGEMENT:
-            conn.execute(text(instruction))
-        conn.commit()   # validation explicite de la transaction
+    # Le journal d'audit RGPD s'accumule au fil des exécutions : il constitue
+    # l'historique des traitements, il n'est donc jamais vidé.
+    resume["audit_rgpd"] = charger_table(audit_rgpd, "audit_rgpd", moteur)
 
     moteur.dispose()    # libération du pool de connexions
     print(f"\nChargement terminé en {sum(resume.values()):.1f} s au total")
     return resume
-
-
-INDEX_POST_CHARGEMENT = [
-    "ALTER TABLE faits_admissions ADD PRIMARY KEY (id_admission)",
-    "CREATE INDEX IF NOT EXISTS idx_faits_date ON faits_admissions(date_id)",
-    "CREATE INDEX IF NOT EXISTS idx_faits_service ON faits_admissions(service_id)",
-    "CREATE INDEX IF NOT EXISTS idx_faits_patho ON faits_admissions(pathologie_id)",
-    "CREATE INDEX IF NOT EXISTS idx_faits_patient "
-    "ON faits_admissions(id_patient_pseudo)",
-]
 
 
 # =============================================================================

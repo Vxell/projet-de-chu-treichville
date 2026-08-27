@@ -29,7 +29,7 @@ activite AS (
         d.annee_mois,
         s.capacite_lits,
         COUNT(*)                        AS nb_admissions,
-        ROUND(SUM(f.duree_sejour_j), 0) AS journees_hospitalisation
+        ROUND(SUM(f.duree_sejour_j)::numeric, 0) AS journees_hospitalisation
     FROM faits_admissions f
     JOIN dim_service s ON s.service_id = f.service_id
     JOIN dim_date    d ON d.date_id    = f.date_id
