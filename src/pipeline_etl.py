@@ -2,8 +2,13 @@
 =============================================================================
  PIPELINE ETL — ENTREPÔT ÉPIDÉMIOLOGIQUE DU CHU DE TREICHVILLE
 =============================================================================
- Étapes 1 à 6 — De l'extraction du fichier source à la modélisation
- en étoile (dimensions et table de faits).
+ Ce module regroupe l'ensemble des fonctions du pipeline, de l'extraction du
+ fichier source jusqu'au chargement du schéma en étoile dans Supabase.
+
+ Il est appelé de deux façons :
+   - par le notebook notebooks/pipeline_etl.ipynb (exécution pas à pas,
+     avec affichage des résultats intermédiaires) ;
+   - par le DAG Airflow (exécution automatisée quotidienne).
 
  Chaque étape est une fonction pure : elle reçoit un DataFrame et en renvoie
  un nouveau, sans modifier son entrée. Ce choix rend chaque étape testable
@@ -718,3 +723,115 @@ def construire_faits(df, dims):
     print(f"  faits_admissions     {len(faits):>6} lignes, "
           f"{len(fks)} clés étrangères toutes résolues")
     return faits
+
+
+# =============================================================================
+# ÉTAPE 7 — CHARGEMENT DANS SUPABASE (PostgreSQL)
+# =============================================================================
+
+def obtenir_moteur(url=None):
+    """
+    Crée le moteur SQLAlchemy vers Supabase.
+
+    La chaîne de connexion n'est jamais écrite en dur : elle provient de la
+    variable d'environnement SUPABASE_DB_URL, elle-même chargée depuis un
+    fichier .env exclu du dépôt Git.
+    """
+    from sqlalchemy import create_engine  # import différé : inutile hors chargement
+
+    url = url or os.environ.get("SUPABASE_DB_URL")
+    if not url:
+        raise ValueError(
+            "SUPABASE_DB_URL absente. Copiez .env.example en .env et "
+            "renseignez la chaîne de connexion Supabase (port 5432)."
+        )
+    # pool_pre_ping évite les erreurs de connexion expirée sur les
+    # chargements longs ; l'offre gratuite de Supabase ferme les sessions
+    # inactives au bout de quelques minutes.
+    return create_engine(url, pool_pre_ping=True)
+
+
+def charger_table(df, nom_table, moteur, si_existe="replace", taille_lot=5000):
+    """
+    Charge un DataFrame dans PostgreSQL et renvoie la durée du chargement.
+
+    `method="multi"` regroupe les lignes en insertions multi-valeurs :
+    sur 120 000 lignes, on passe d'environ vingt minutes en insertion ligne
+    à ligne à moins d'une minute. Le paramètre `chunksize` borne la taille
+    de chaque requête pour ne pas dépasser la limite de paramètres du
+    driver PostgreSQL.
+    """
+    debut = time.time()
+    df.to_sql(nom_table, moteur, if_exists=si_existe, index=False,
+              chunksize=taille_lot, method="multi")
+    duree = time.time() - debut
+    print(f"  {nom_table:<20} {len(df):>7,} lignes chargées en {duree:>6.1f} s")
+    return duree
+
+
+def charger_entrepot(dims, faits, audit_rgpd, moteur):
+    """
+    Charge l'ensemble de l'entrepôt dans l'ordre imposé par les contraintes
+    d'intégrité : dimensions d'abord, table de faits ensuite.
+    """
+    from sqlalchemy import text
+
+    resume = {}
+    for nom, table in dims.items():
+        resume[nom] = charger_table(table, nom, moteur)
+    resume["faits_admissions"] = charger_table(faits, "faits_admissions", moteur)
+    resume["audit_rgpd"] = charger_table(audit_rgpd, "audit_rgpd", moteur,
+                                         si_existe="append")
+
+    # Les contraintes et index sont posés après le chargement : les créer
+    # avant ralentirait chaque insertion par la vérification des clés.
+    with moteur.connect() as conn:
+        for instruction in INDEX_POST_CHARGEMENT:
+            conn.execute(text(instruction))
+        conn.commit()   # validation explicite de la transaction
+
+    moteur.dispose()    # libération du pool de connexions
+    print(f"\nChargement terminé en {sum(resume.values()):.1f} s au total")
+    return resume
+
+
+INDEX_POST_CHARGEMENT = [
+    "ALTER TABLE faits_admissions ADD PRIMARY KEY (id_admission)",
+    "CREATE INDEX IF NOT EXISTS idx_faits_date ON faits_admissions(date_id)",
+    "CREATE INDEX IF NOT EXISTS idx_faits_service ON faits_admissions(service_id)",
+    "CREATE INDEX IF NOT EXISTS idx_faits_patho ON faits_admissions(pathologie_id)",
+    "CREATE INDEX IF NOT EXISTS idx_faits_patient "
+    "ON faits_admissions(id_patient_pseudo)",
+]
+
+
+# =============================================================================
+# ORCHESTRATION COMPLÈTE
+# =============================================================================
+
+def executer_pipeline(chemin_csv, charger=False, url_bd=None):
+    """
+    Exécute le pipeline de bout en bout.
+
+    Le paramètre `charger` permet de rejouer toute la transformation sans
+    solliciter la base : c'est ce mode qui est utilisé lors des tests et lors
+    de l'exécution du notebook quand les tables sont déjà en place.
+    """
+    JOURNAL.clear()
+    df = extraire(chemin_csv)
+    df = nettoyer(df)
+    df, audit_rgpd = pseudonymiser(df)
+    df = enrichir(df)
+    verifier_absence_donnees_personnelles(df)
+    rapport = controler_qualite(df)
+    dims = construire_dimensions(df)
+    faits = construire_faits(df, dims)
+
+    if charger:
+        charger_entrepot(dims, faits, audit_rgpd, obtenir_moteur(url_bd))
+
+    return {
+        "donnees": df, "dimensions": dims, "faits": faits,
+        "audit_rgpd": audit_rgpd, "rapport_qualite": rapport,
+        "journal": pd.DataFrame(JOURNAL),
+    }
