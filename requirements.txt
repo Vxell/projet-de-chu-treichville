@@ -10,6 +10,11 @@
 pandas>=2.2,<3.0
 numpy>=1.26,<2.0
 
+# --- Base de données ---------------------------------------------------------
+SQLAlchemy>=2.0
+psycopg2-binary>=2.9        # driver PostgreSQL (Supabase)
+python-dotenv>=1.0          # chargement des secrets depuis .env
+
 # --- Notebook ----------------------------------------------------------------
 jupyter>=1.1
 notebook>=7.2

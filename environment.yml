@@ -3,11 +3,6 @@
 # =============================================================================
 #  Recréation :  conda env create -f environment.yml
 #  Mise à jour :  conda env update -f environment.yml --prune
-#
-#  Ce fichier est complété au fur et à mesure de l'avancement du pipeline.
-#  Il ne liste que les paquets explicitement demandés, sans les dépendances
-#  transitives ni les versions spécifiques à un système d'exploitation :
-#  l'environnement reste ainsi recréable sur Windows, macOS et Linux.
 # =============================================================================
 
 name: chu-data-eng
@@ -22,6 +17,11 @@ dependencies:
   # --- Traitement des données ------------------------------------------------
   - pandas>=2.2
   - numpy>=1.26
+
+  # --- Base de données -------------------------------------------------------
+  - sqlalchemy>=2.0
+  - psycopg2                  # driver PostgreSQL (Supabase)
+  - python-dotenv>=1.0        # chargement des secrets depuis .env
 
   # --- Notebook --------------------------------------------------------------
   - jupyter
