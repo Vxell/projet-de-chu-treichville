@@ -776,6 +776,14 @@ def charger_entrepot(dims, faits, audit_rgpd, moteur):
     """
     from sqlalchemy import text
 
+    # faits_admissions référence chaque dimension par clé étrangère (voir
+    # sql/01_schema_etoile.sql) : il faut la supprimer avant les dimensions,
+    # sans quoi le DROP TABLE émis par to_sql(if_exists="replace") échoue
+    # avec DependentObjectsStillExist.
+    with moteur.connect() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS faits_admissions CASCADE"))
+        conn.commit()
+
     resume = {}
     for nom, table in dims.items():
         resume[nom] = charger_table(table, nom, moteur)
