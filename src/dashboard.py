@@ -11,6 +11,7 @@
 =============================================================================
 """
 
+import inspect
 import os
 
 import matplotlib
@@ -31,7 +32,7 @@ COULEURS = {
 BLEU, ROUGE, GRIS = "#2471A3", "#C0392B", "#5D6D7E"
 
 plt.rcParams.update({
-    "figure.dpi": 110,
+    "figure.dpi": 100,
     "savefig.dpi": 150,          # exigence du sujet : >= 150 dpi
     "font.size": 10,
     "axes.titlesize": 12,
@@ -166,8 +167,16 @@ def g4_duree_par_service(v, ax):
     donnees = [v.loc[v["libelle_service"] == s, "duree_sejour_j"].dropna()
                for s in ordre]
 
-    bp = ax.boxplot(donnees, vert=False, showfliers=False, patch_artist=True,
-                    medianprops=dict(color="black", lw=1.6))
+    # `orientation` remplace `vert`, déprécié depuis Matplotlib 3.11. Le
+    # paramètre n'existant qu'à partir de la 3.10, on choisit selon la version
+    # installée : le code reste exécutable sur les deux générations.
+    sens = ({"orientation": "horizontal"}
+            if hasattr(ax.boxplot, "__wrapped__")
+            or "orientation" in inspect.signature(ax.boxplot).parameters
+            else {"vert": False})
+
+    bp = ax.boxplot(donnees, showfliers=False, patch_artist=True,
+                    medianprops=dict(color="black", lw=1.6), **sens)
     for boite in bp["boxes"]:
         boite.set(facecolor=BLEU, alpha=0.55)
 
@@ -250,6 +259,38 @@ def g6_occupation_services(v, dims, ax):
 
 
 # =============================================================================
+# SAUVEGARDE
+# =============================================================================
+
+def _sauvegarder(fig, chemin):
+    """
+    Exporte une figure en PNG, avec repli en cas d'échec du rendu.
+
+    Le calcul de la boîte englobante serrée (bbox_inches="tight") oblige
+    matplotlib à rasteriser tous les textes pour les mesurer. Sur certaines
+    versions de FreeType, cette rasterisation échoue sur les libellés pivotés
+    avec une erreur « raster overflow ». Le repli exporte alors la figure avec
+    ses marges par défaut : le graphique est identique, seules les marges sont
+    un peu plus larges.
+
+    Un graphique en échec n'interrompt pas la génération des autres : le
+    tableau de bord reste exploitable, et le message indique lequel a échoué.
+    """
+    try:
+        fig.savefig(chemin, bbox_inches="tight")
+    except RuntimeError as erreur:
+        try:
+            fig.savefig(chemin)
+            print(f"  {chemin}  (marges par défaut — {type(erreur).__name__})")
+            return True
+        except RuntimeError as erreur_finale:
+            print(f"  ÉCHEC {os.path.basename(chemin)} : {erreur_finale}")
+            return False
+    print(f"  {chemin}")
+    return True
+
+
+# =============================================================================
 # ORCHESTRATION
 # =============================================================================
 
@@ -273,10 +314,9 @@ def generer_dashboard(dims, faits, dossier="dashboards"):
         tracer(ax)
         fig.tight_layout()
         chemin = os.path.join(dossier, f"{nom}.png")
-        fig.savefig(chemin, bbox_inches="tight")
+        if _sauvegarder(fig, chemin):
+            fichiers.append(chemin)
         plt.close(fig)
-        fichiers.append(chemin)
-        print(f"  {chemin}")
 
     # Planche de synthèse pour la soutenance
     fig, axes = plt.subplots(3, 2, figsize=(18, 16))
@@ -286,20 +326,41 @@ def generer_dashboard(dims, faits, dossier="dashboards"):
                  fontsize=17, fontweight="bold", y=0.995)
     fig.tight_layout(rect=[0, 0, 1, 0.98])
     chemin = os.path.join(dossier, "00_planche_synthese.png")
-    fig.savefig(chemin, bbox_inches="tight")
+    if _sauvegarder(fig, chemin):
+        fichiers.insert(0, chemin)
     plt.close(fig)
-    fichiers.insert(0, chemin)
-    print(f"  {chemin}")
 
     return fichiers
 
 
 if __name__ == "__main__":
     import sys
-    sys.path.insert(0, os.path.dirname(__file__))
+
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+    # Les secrets sont lus depuis le fichier .env à la racine du dépôt, comme
+    # le fait le notebook. Sans ce chargement, le script échouerait sur
+    # l'absence de DE_SEL_PSEUDO alors que la variable est bien renseignée :
+    # un point d'entrée ne doit pas exiger de l'utilisateur qu'il exporte ses
+    # variables d'environnement à la main.
+    RACINE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(os.path.join(RACINE, ".env"))
+    except ImportError:
+        print("python-dotenv absent : les variables doivent être définies "
+              "dans l'environnement.")
+
     from pipeline_etl import executer_pipeline
 
-    resultat = executer_pipeline(
-        os.environ.get("DE_FICHIER_SOURCE",
-                       "data/raw/admissions_chu_treichville.csv"))
-    generer_dashboard(resultat["dimensions"], resultat["faits"])
+    # Les chemins sont résolus depuis la racine du dépôt et non depuis le
+    # répertoire courant : le script s'exécute ainsi de n'importe où.
+    source = os.environ.get(
+        "DE_FICHIER_SOURCE",
+        os.path.join(RACINE, "data", "raw", "admissions_chu_treichville.csv"))
+    if not os.path.isabs(source):
+        source = os.path.join(RACINE, source)
+
+    resultat = executer_pipeline(source)
+    generer_dashboard(resultat["dimensions"], resultat["faits"],
+                      dossier=os.path.join(RACINE, "dashboards"))
