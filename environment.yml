@@ -23,6 +23,12 @@ dependencies:
   - psycopg2                  # driver PostgreSQL (Supabase)
   - python-dotenv>=1.0        # chargement des secrets depuis .env
 
+  # --- Visualisation ---------------------------------------------------------
+  - matplotlib>=3.9
+
+  # --- Analyses locales ------------------------------------------------------
+  - python-duckdb>=1.1        # moteur SQL de secours pour l'exécution du notebook
+
   # --- Notebook --------------------------------------------------------------
   - jupyter
   - ipykernel
