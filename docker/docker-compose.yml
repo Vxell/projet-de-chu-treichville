@@ -14,7 +14,7 @@
 #  il a besoin — c'est précisément ce que la conteneurisation permet de faire
 #  proprement, et ce qu'un environnement local unique ne permet pas.
 #
-#  Démarrage :   docker compose --env-file ../.env up -d --build
+#  Démarrage :   docker compose up -d --build
 #  Interfaces :  Airflow  http://localhost:8080  (admin / admin)
 #                Jupyter  http://localhost:8888
 # =============================================================================
@@ -29,9 +29,13 @@ x-airflow-commun: &airflow-commun
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     AIRFLOW__CORE__DEFAULT_TIMEZONE: Africa/Abidjan
     PYTHONPATH: /opt/airflow/src
-    # Secrets injectés depuis le fichier .env, jamais écrits dans l'image
-    SUPABASE_DB_URL: ${SUPABASE_DB_URL}
-    DE_SEL_PSEUDO: ${DE_SEL_PSEUDO}
+  # Les secrets sont transmis directement au conteneur depuis le fichier .env,
+  # sans passer par une substitution de variables au moment de la lecture du
+  # compose. Deux avantages : plus besoin de --env-file à chaque commande, et
+  # un oubli ne se traduit plus par des variables silencieusement vides — le
+  # démarrage échoue franchement si le fichier est absent.
+  env_file:
+    - ../.env
   volumes:
     - ../dags:/opt/airflow/dags
     - ../src:/opt/airflow/src
@@ -105,9 +109,9 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.jupyter
     container_name: chu_jupyter
+    env_file:
+      - ../.env
     environment:
-      SUPABASE_DB_URL: ${SUPABASE_DB_URL}
-      DE_SEL_PSEUDO: ${DE_SEL_PSEUDO}
       PYTHONPATH: /app/src
     command: >
       jupyter notebook --ip=0.0.0.0 --port=8888 --no-browser --allow-root

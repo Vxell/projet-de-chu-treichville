@@ -750,7 +750,15 @@ def obtenir_moteur(url=None):
     # pool_pre_ping évite les erreurs de connexion expirée sur les
     # chargements longs ; l'offre gratuite de Supabase ferme les sessions
     # inactives au bout de quelques minutes.
-    return create_engine(url, pool_pre_ping=True)
+    #
+    # future=True impose le style de connexion SQLAlchemy 2.0, où la
+    # transaction se valide explicitement par conn.commit(). Sans ce
+    # paramètre, SQLAlchemy 1.4 renvoie une connexion héritée dépourvue de
+    # cette méthode : le code fonctionnerait dans le notebook (SQLAlchemy 2.x)
+    # et échouerait dans le conteneur Airflow (SQLAlchemy 1.4, imposé par
+    # Airflow). Le paramètre est accepté et sans effet en 2.x, ce qui rend le
+    # module compatible avec les deux versions.
+    return create_engine(url, pool_pre_ping=True, future=True)
 
 
 def charger_table(df, nom_table, moteur, si_existe="append", taille_lot=5000):
