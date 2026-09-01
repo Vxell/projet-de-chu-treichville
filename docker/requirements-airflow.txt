@@ -9,12 +9,19 @@
 #  d'Airflow (MappedAnnotationError sur TaskInstance) et rend l'ordonnanceur,
 #  la migration de base et la création d'utilisateur inopérants.
 #
-#  On ne liste donc ici que ce qu'Airflow ne fournit pas et dont le pipeline
-#  a besoin. Le pilote PostgreSQL utilisé par charger_supabase() est celui
-#  d'Airflow, ce qui est suffisant.
+#  Conséquence en cascade sur pandas : à partir de la version 2.2, pandas
+#  exige SQLAlchemy >= 2.0. Avec SQLAlchemy 1.4, pandas cesse de reconnaître
+#  un Engine comme connecteur SQLAlchemy, le traite comme un objet DBAPI2 et
+#  échoue sur to_sql avec « 'Engine' object has no attribute 'cursor' ».
+#  D'où le plafond à 2.2 ci-dessous — pandas 2.1 est la dernière série
+#  compatible avec SQLAlchemy 1.4.
+#
+#  L'environnement de développement (conda) et le notebook n'ont pas cette
+#  contrainte : ils utilisent pandas et SQLAlchemy récents. C'est précisément
+#  pourquoi chaque environnement a son propre fichier de dépendances.
 # =============================================================================
 
-pandas>=2.2,<3.0
-pyarrow>=17.0               # sérialisation Parquet entre les tâches
-matplotlib>=3.9             # génération du tableau de bord
+pandas>=2.1,<2.2            # plafond imposé par SQLAlchemy 1.4 (voir ci-dessus)
+pyarrow>=14.0               # sérialisation Parquet entre les tâches
+matplotlib>=3.7             # génération du tableau de bord
 python-dotenv>=1.0          # chargement du .env dans les tâches

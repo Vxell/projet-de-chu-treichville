@@ -47,7 +47,12 @@ default_args = {
     "owner": "equipe-data-chu",
     "depends_on_past": False,
     "email": ["data@chu-treichville.ci"],
-    "email_on_failure": True,
+    # L'alerte par courriel est désactivée tant qu'aucun serveur SMTP n'est
+    # configuré. Laissée active, elle produit une ConnectionRefusedError à
+    # chaque échec de tâche : le journal se remplit d'une trace parasite qui
+    # masque l'erreur réelle. Pour l'activer en production, déclarer une
+    # connexion SMTP dans Airflow puis repasser ce paramètre à True.
+    "email_on_failure": False,
     "email_on_retry": False,
     "retries": 2,
     "retry_delay": timedelta(minutes=5),
