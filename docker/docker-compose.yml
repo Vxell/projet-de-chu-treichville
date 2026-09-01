@@ -1,0 +1,126 @@
+# =============================================================================
+#  Environnement conteneurisé — CHU de Treichville
+# =============================================================================
+#  Trois services, DEUX images distinctes :
+#
+#    - postgres : base de métadonnées d'Airflow (à ne pas confondre avec
+#                 Supabase, qui héberge l'entrepôt analytique)
+#    - airflow  : ordonnanceur et interface web, image basée sur apache/airflow
+#    - jupyter  : exécution du notebook, image Python nue
+#
+#  Pourquoi deux images. Airflow 2.10 impose SQLAlchemy 1.4, alors que le
+#  pipeline utilise SQLAlchemy 2.x pour Supabase. Les faire cohabiter dans une
+#  seule image casse Airflow. Chaque service reçoit donc l'environnement dont
+#  il a besoin — c'est précisément ce que la conteneurisation permet de faire
+#  proprement, et ce qu'un environnement local unique ne permet pas.
+#
+#  Démarrage :   docker compose --env-file ../.env up -d --build
+#  Interfaces :  Airflow  http://localhost:8080  (admin / admin)
+#                Jupyter  http://localhost:8888
+# =============================================================================
+
+x-airflow-commun: &airflow-commun
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DEFAULT_TIMEZONE: Africa/Abidjan
+    PYTHONPATH: /opt/airflow/src
+    # Secrets injectés depuis le fichier .env, jamais écrits dans l'image
+    SUPABASE_DB_URL: ${SUPABASE_DB_URL}
+    DE_SEL_PSEUDO: ${DE_SEL_PSEUDO}
+  volumes:
+    - ../dags:/opt/airflow/dags
+    - ../src:/opt/airflow/src
+    - ../data:/opt/airflow/data
+    - ../dashboards:/opt/airflow/dashboards
+    - ../logs:/opt/airflow/logs
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+
+  # ---------------------------------------------------------------------------
+  #  Base de métadonnées d'Airflow
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:15-alpine
+    container_name: chu_postgres
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # L'ordonnanceur ne démarre qu'une fois la base réellement prête :
+      # sans ce contrôle, Airflow échoue au premier lancement.
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  #  Initialisation d'Airflow (migration du schéma + compte administrateur)
+  # ---------------------------------------------------------------------------
+  airflow-init:
+    <<: *airflow-commun
+    container_name: chu_airflow_init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate
+        airflow users create \
+          --username admin --password admin \
+          --firstname Equipe --lastname Data \
+          --role Admin --email data@chu-treichville.ci || true
+    restart: on-failure
+
+  # ---------------------------------------------------------------------------
+  #  Ordonnanceur et interface web
+  # ---------------------------------------------------------------------------
+  airflow:
+    <<: *airflow-commun
+    container_name: chu_airflow
+    command: bash -c "airflow scheduler & airflow webserver"
+    ports:
+      - "8080:8080"
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  #  Environnement Jupyter pour l'exécution du notebook
+  # ---------------------------------------------------------------------------
+  jupyter:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.jupyter
+    container_name: chu_jupyter
+    environment:
+      SUPABASE_DB_URL: ${SUPABASE_DB_URL}
+      DE_SEL_PSEUDO: ${DE_SEL_PSEUDO}
+      PYTHONPATH: /app/src
+    command: >
+      jupyter notebook --ip=0.0.0.0 --port=8888 --no-browser --allow-root
+      --NotebookApp.token='' --notebook-dir=/app/notebooks
+    ports:
+      - "8888:8888"
+    volumes:
+      - ../notebooks:/app/notebooks
+      - ../src:/app/src
+      - ../sql:/app/sql
+      - ../data:/app/data
+      - ../dashboards:/app/dashboards
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

@@ -1,0 +1,20 @@
+# =============================================================================
+#  Dépendances AJOUTÉES à l'image Airflow officielle
+# =============================================================================
+#  Ce fichier est distinct de requirements.txt à la racine, et c'est délibéré.
+#
+#  L'image apache/airflow embarque déjà SQLAlchemy et psycopg2 dans des
+#  versions strictement contraintes : Airflow 2.10 ne fonctionne qu'avec
+#  SQLAlchemy 1.4. Installer SQLAlchemy 2.x par-dessus casse le mapping ORM
+#  d'Airflow (MappedAnnotationError sur TaskInstance) et rend l'ordonnanceur,
+#  la migration de base et la création d'utilisateur inopérants.
+#
+#  On ne liste donc ici que ce qu'Airflow ne fournit pas et dont le pipeline
+#  a besoin. Le pilote PostgreSQL utilisé par charger_supabase() est celui
+#  d'Airflow, ce qui est suffisant.
+# =============================================================================
+
+pandas>=2.2,<3.0
+pyarrow>=17.0               # sérialisation Parquet entre les tâches
+matplotlib>=3.9             # génération du tableau de bord
+python-dotenv>=1.0          # chargement du .env dans les tâches

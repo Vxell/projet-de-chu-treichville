@@ -1,0 +1,29 @@
+# =============================================================================
+#  Image Jupyter — exécution du notebook
+# =============================================================================
+#  Image Python nue et non l'image Airflow : cette dernière définit un point
+#  d'entrée qui préfixe toute commande par `airflow`, transformant
+#  `jupyter notebook` en `airflow jupyter` — commande inexistante.
+#
+#  Ici, aucune contrainte de version imposée par Airflow : on installe le
+#  requirements.txt du projet tel quel, avec SQLAlchemy 2.x que le pipeline
+#  utilise pour Supabase.
+# =============================================================================
+
+FROM python:3.11-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        libpq-dev \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+COPY src/ /app/src/
+COPY sql/ /app/sql/
+
+ENV PYTHONPATH="/app/src"
+WORKDIR /app
