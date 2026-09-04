@@ -11,7 +11,7 @@
 > Pipeline complet d'alimentation d'un entrepôt épidémiologique, de l'export
 > brut du système d'information hospitalier jusqu'au tableau de bord.
 
-**Binôme :** *[à compléter]* · **Enseignant :** GOUAH Tato Serge · **Promotion 2024-2025**
+**Etudiant :** *Kouame Guy Marc Axel* · **Enseignant :** GOUAH Tato Serge · **
 
 ---
 
@@ -116,7 +116,7 @@ le plus grand nombre d'admissions avec une létalité de 4,1 %, tandis que les
 ### Option 1 — Docker (recommandée)
 
 ```bash
-git clone https://github.com/VOTRE-COMPTE/projet-de-chu-treichville.git
+git clone https://github.com/Vxell/projet-de-chu-treichville.git
 cd projet-de-chu-treichville
 
 cp .env.example .env        # renseigner SUPABASE_DB_URL et DE_SEL_PSEUDO
@@ -244,8 +244,3 @@ python src/dashboard.py
 ```
 
 ---
-
-## Outils d'IA
-
-Conformément à la section 6.3 du sujet : *[à compléter honnêtement — outil
-utilisé et tâche concernée]*.

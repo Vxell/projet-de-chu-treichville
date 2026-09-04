@@ -126,11 +126,3 @@ les croisements pathologie × tranche d'âge.
 | 10 | Orchestration Airflow et conteneurisation |
 | 11 | Rapport et soutenance |
 
-## 8. Risques identifiés
-
-| Risque | Parade |
-|---|---|
-| Chargement de 120 000 lignes trop lent | Insertions groupées, index posés après chargement |
-| Notebook non exécutable sur un autre poste | Aucun secret en dur, dépendances figées, test sur clone propre avant rendu |
-| Analyses faussées par des libellés non normalisés | Référentiels métier explicites, contrôle du nombre de modalités après nettoyage |
-| Perte du chaînage patient après pseudonymisation | Hachage déterministe salé plutôt que suppression |
